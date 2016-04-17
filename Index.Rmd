@@ -1,0 +1,203 @@
+---
+title: "Course Project Practical Machine Learning"
+output: html_document
+---
+
+## Introduction
+
+```{r,echo=FALSE,warning=FALSE,message=FALSE}
+require(knitr)
+opts_chunk$set(cache=T,warning = F)
+setwd("D:/my/Documents/Coursera/Data Science Johns Hopkins/Practical Machine Learning/Course Project")
+```
+
+The aim of this project is to try to fit a machine learning mechanism in order to predict how well people perform when they do exercises. Oftentimes, everyone thinks how much he/she exercses, here the emphasis is on how well we do that. In order to measure the quality of our exercise, the authors of the paper(see Appendix) gather information from accelerometers on the belt, arm, forearm, and dumbbell. First we load the data, and have a quick look at its dimentions.
+
+```{r}
+trainingPml <- read.csv(file="./pml-training.csv",stringsAsFactors=F)
+testingPml <- read.csv(file="./pml-testing.csv", stringsAsFactors=F)
+rbind("dimention training dataset"= dim(trainingPml),
+      "dimention testing dataset"= dim(testingPml))
+```
+
+The first conclusion could be that there are 160 covariates with which we can try to build a model for predicting how well we do excercise. That is quite a lot, and they could have quite different characteristics. On the other hand the variable that characterizes how well an exercise(and consequently should be predicted) is called 'classe'. A distribution of the values of it could be seen here:
+
+```{r}
+table(trainingPml$classe)
+```
+
+## Exploratory Data Analysis
+With the basic plots of the data of a small fraction of the data it can be seen some basic 'trends' or probably get some feeling about the data. Also, a feature plot is rendered for the values from gyroscope, accelerometer and magnetometer for the 'x' axis of the belt sensor.
+```{r,cache=TRUE}
+library(ggplot2);library(caret)
+p1<-qplot(trainingPml$classe,trainingPml$stddev_yaw_arm)
+p2<-qplot(trainingPml$classe,trainingPml$kurtosis_yaw_forearm)
+p3<-qplot(trainingPml$classe,trainingPml$roll_dumbbell)
+p4<-qplot(trainingPml$classe,trainingPml$amplitude_pitch_belt)
+library(gridExtra)
+grid.arrange(p1,p2,p3,p4,ncol=2,nrow=2)
+
+featurePlot(x=trainingPml[,c("gyros_belt_x","accel_belt_x","magnet_belt_x")], y = trainingPml$classe,plot="pairs")
+```
+
+From the first plot it can be seen that for some covariates there is some tendency of association between different classes of performing the exercises, but for others--there is none. From the second plot it can be seen the pairwise association between the selected covariates. Again, the concusion is broadly similar to that of the first one. Nevertheless, there are 160 variables in total and perhaps an appropriate selection should be performed in order to weed out the less important information, and also to simplify our analysis.
+
+## Selection Covariates
+Important part of the analysis is to discard the the variables with little variation, and consequently little explanatory power. That could be done with the function for identifying the near zero variables in Caret package in R. The function would be run on both parts of the data--testing nad training.
+
+```{r,cache=T}
+library(caret)
+nzv_test <- nearZeroVar(testingPml,saveMetrics = T)
+nzv_train <- nearZeroVar(trainingPml,saveMetrics = T)
+sum(!nzv_test[,4]); sum(!nzv_train[,4]) #none-zero covariates
+
+training<-trainingPml[,!nzv_test[,4]]; training <- training[,2:length(training[1,])]
+testing <- testingPml[,!nzv_test[,4]]; testing <- testing[,2:length(testing[1,])]
+```
+
+It can be seen that from the 160 variables in the training set 60 are near zero and 100 are 'okay'. However, for the testset there are 101 near zero variables and only 59 'okay' ones. In my experience, a better solution is to limit the analysis to non-zero variables of the testing set. Attempting to build a predictin with the 100 'good' covariates of the  trainingset could not produce 'predicted' values for the test data. That was the reason for the decision to work only with the 59 non-zero variables of the testset. In addition, I removed the first variable, since it was just an index, and probably has no explanatory power.
+
+## Creating Data Partition
+
+In order to do a cross validation the training dataset would be sliced into into two new sub-training and sub-testing sets. That way a model could be build in the new sub-training dataset and subsequently  tested on the rest of the data. The dimentions of the newly partitioned data could be seen as well, to get a feeling as to what is going on.
+
+```{r,cache=T}
+library(caret)
+inTrain <- createDataPartition(training$classe, p = .80, list=FALSE)
+training_sub <- training[inTrain,]
+testing_sub <- training[-inTrain,]
+rbind("dimention training dataset"= dim(training_sub),
+      "dimention testing dataset"= dim(testing_sub))
+```
+
+## Fitting Models
+
+Different models could be fitted with the so prepared data. I would endeavour to show the (very) different results that could be discerned, as a result. First, I would start with the least good model for this data.
+
+### Predicting/building a model with Trees
+
+Fitting the model is straight-forward in R:
+
+```{r,cache=T}
+#fitControl <- trainControl(method = "cv",number = 10)
+#fitModel_tree <- train(classe~.,method="rpart", trControl=fitControl, data=training_sub)  
+
+set.seed(123)
+fitModel_tree <- train(classe~.,method="rpart", data=training_sub)
+
+#predict(fitModel_tree,testing_sub)
+```
+
+The model itself could be seen both in a kind of 'raw' form and in a 'fancy' graph below.
+
+```{r}
+print(fitModel_tree$finalModel)
+
+library(rattle)
+fancyRpartPlot(fitModel_tree$finalModel)
+```
+
+The importance of the variables selected in the tree could also be useful for  a better understanding of the model:
+
+```{r}
+head(varImp(fitModel_tree$finalModel),20)
+```
+
+Finally, the in-sample and out-of-sample errors could also be seen here with the accuracy measure, i.e. how many times the chosen variable 'classe' was categorized correctly. Notably the out-of-sample error is slightly higher, since the accuracy is slightly lower, but that is to be expected, since that is the 'new' information.
+
+```{r}
+confusionMatrix(predict(fitModel_tree,training_sub),training_sub$classe) #in-sample error
+confusionMatrix(predict(fitModel_tree,testing_sub),testing_sub$classe) #out-of-sample error
+```
+
+### Pedicting/building a model with Linear Discriminant Analysis
+
+Anoher model that could be fitted is the Linear Discriminant Analysis(LDA). It could be shown that the results are much better than the prediction with trees. But first fotting the model again with the default options.
+
+```{r,cache=T,warning=F}
+set.seed(123)
+fitModel_lda <- train(classe~.,method="lda",data=training_sub)
+```
+
+A feel for the model is supplied here:
+
+```{r}
+fitModel_lda$finalModel[[4]][1:12,]
+```
+
+Finally, the all important in- and out-of-sample errors are computed. The oblious conclusion is that the accuracy of LDA is much higher--in the order of 85%, compared with the previous model. Also the out-of-sample error is slightly higher(accuracy--slightly lower).
+
+```{r}
+confusionMatrix(predict(fitModel_lda,training_sub),training_sub$classe)
+confusionMatrix(predict(fitModel_lda,testing_sub),testing_sub$classe)
+```
+
+## Prediction with RandomForest
+
+Finally, an illustration of the best model--RandomForest(RF). With this data, the RF model requires a significant computational power. Hence, the use of some extra options for alleviating the heavy calculation task. 
+
+```{r,eval=T}
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+set.seed(123)
+fitModel_rf <- train(classe~.,method="rf",trControl = fitControl,data=training_sub)
+stopCluster(cluster)
+```
+
+The in- and out-of-sample errors are astonoshing. A 100% accuracy for the in-sample error is quite an achievement. The out-of-sample error is also nearing 100%, depending on the random samples it could also be 100%.
+
+```{r,eval=T}
+confusionMatrix(predict(fitModel_rf,training_sub),training_sub$classe)
+confusionMatrix(predict(fitModel_rf,testing_sub),testing_sub$classe)
+```
+
+## Predicting the Original Testset
+
+Having built and tested a model using the data only from the original training set, now is the time to try to test our models on the original testing dataset. I would augment the test data with the answers of the quiz from the course, in order to compute out-of-sample error and also to judge once more our fitted models.
+
+```{r}
+testing$problem_id<-as.factor( c("B","A","B","A","A","E","D","B","A","A",
+"B","C","B","A","E","E","A","B","B","B"))
+```
+
+First, our raw results for the 20 'new' cases needed to be predicted. Again, different models yield differnt predictions. 
+
+```{r}
+predict(fitModel_tree,testing)
+predict(fitModel_lda,testing)
+predict(fitModel_rf,testing)
+```
+
+The out-of-sample error for the original testing dataset could be seen here. Astonishing again, with the 100% accuracy of the RF model.
+
+```{r}
+confusionMatrix(predict(fitModel_tree,testing),testing$problem_id)
+confusionMatrix(predict(fitModel_lda,testing),testing$problem_id)
+confusionMatrix(predict(fitModel_rf,testing),testing$problem_id)
+```
+
+## Conclusion
+
+With this Course Project the aim was to show how different machine learning algorithms could be fitted into a dataset, and find which one best describes it. Naturally enough, different models perform differently with different data. It is obvious for example that the tree model really is not a good match for our data, the LDA model produces relatively good predictions, and in the end the the RF model describes data brilliantly, and yields almost perfect predictions. As a potential criticism, I did mot explored the highly correlated variables of the data, and/or tryng to remove or deal with it. 
+
+## Appendix
+
+### The Data Source
+
+[training dataset](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+[testing dataset](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+### The Original Paper
+
+[Velloso, E. et al, Qualitative Activity Recognition of Weight Lifting Exercises, (2013)](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf)
+
+[A website with extra information](http://groupware.les.inf.puc-rio.br/har)
+
+
